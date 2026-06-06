@@ -1,11 +1,9 @@
 import os
-import asyncio
 import logging
 import requests
 from datetime import datetime
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
-from telegram.constants import ParseMode
+from telegram.ext import Updater, CommandHandler
+from telegram import ParseMode
 
 logging.basicConfig(format="%(asctime)s | %(levelname)s | %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -138,78 +136,80 @@ def format_signal(s):
         f"⚠️ _Use 1-2% risk per trade. Not financial advice._"
     )
 
-async def scan_and_alert(bot):
+def scan_and_alert(bot):
     log.info("Scanning pairs...")
     for pair_name, (from_cur, to_cur) in PAIRS.items():
         result = analyse(pair_name, from_cur, to_cur)
         if result:
-            await bot.send_message(
+            bot.send_message(
                 chat_id=CHAT_ID,
                 text=format_signal(result),
                 parse_mode=ParseMode.MARKDOWN
             )
             log.info(f"Signal sent: {pair_name} {result['direction']}")
-        await asyncio.sleep(1)
 
-async def run_scanner(app):
-    await asyncio.sleep(5)
-    await app.bot.send_message(
-        chat_id=CHAT_ID,
-        text=(
-            "⚡ *Al-Nur Forex Signal Bot is LIVE!*\n"
-            f"Scanning: {', '.join(PAIRS.keys())}\n"
-            f"Interval: every {INTERVAL} minutes\n"
-            "Strategy: EMA 9/21 + RSI Filter\n\n"
-            "Commands: /status · /pairs · /scan"
-        ),
-        parse_mode=ParseMode.MARKDOWN
-    )
-    while True:
-        await scan_and_alert(app.bot)
-        await asyncio.sleep(INTERVAL * 60)
-
-async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "⚡ *Al-Nur Forex Signal Bot*\n\n"
+def cmd_start(update, context):
+    update.message.reply_text(
+        "⚡ *Al-Nur Forex Signal Bot is LIVE!*\n\n"
         "/status — check bot status\n"
         "/pairs — list active pairs\n"
         "/scan — force instant scan",
         parse_mode=ParseMode.MARKDOWN
     )
 
-async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+def cmd_status(update, context):
+    update.message.reply_text(
         f"✅ Bot is running\n"
         f"⏱ Interval: {INTERVAL} min\n"
         f"💱 Pairs: {len(PAIRS)}\n"
         f"📡 Last signals: {last_signals or 'None yet'}"
     )
 
-async def cmd_pairs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+def cmd_pairs(update, context):
     pairs_list = "\n".join(f"• {p}" for p in PAIRS.keys())
-    await update.message.reply_text(
+    update.message.reply_text(
         f"📊 *Active Pairs:*\n{pairs_list}",
         parse_mode=ParseMode.MARKDOWN
     )
 
-async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 Scanning now...")
-    await scan_and_alert(ctx.bot)
-    await update.message.reply_text("✅ Scan complete!")
+def cmd_scan(update, context):
+    update.message.reply_text("🔍 Scanning now...")
+    scan_and_alert(context.bot)
+    update.message.reply_text("✅ Scan complete!")
 
-async def post_init(application):
-    asyncio.ensure_future(run_scanner(application))
+def scanner_job(context):
+    scan_and_alert(context.bot)
 
 def main():
     if not TOKEN or not CHAT_ID:
         raise ValueError("Set TELEGRAM_TOKEN and CHAT_ID!")
-    application = Application.builder().token(TOKEN).post_init(post_init).build()
-    application.add_handler(CommandHandler("start", cmd_start))
-    application.add_handler(CommandHandler("status", cmd_status))
-    application.add_handler(CommandHandler("pairs", cmd_pairs))
-    application.add_handler(CommandHandler("scan", cmd_scan))
+    
+    updater = Updater(TOKEN)
+    dp = updater.dispatcher
+    jq = updater.job_queue
+
+    dp.add_handler(CommandHandler("start", cmd_start))
+    dp.add_handler(CommandHandler("status", cmd_status))
+    dp.add_handler(CommandHandler("pairs", cmd_pairs))
+    dp.add_handler(CommandHandler("scan", cmd_scan))
+
+    jq.run_repeating(scanner_job, interval=INTERVAL * 60, first=10)
+
+    updater.bot.send_message(
+        chat_id=CHAT_ID,
+        text=(
+            "⚡ *Al-Nur Forex Signal Bot is LIVE!*\n"
+            f"Scanning: {', '.join(PAIRS.keys())}\n"
+            f"Interval: every {INTERVAL} minutes\n"
+            "Strategy: EMA 9/21 + RSI\n\n"
+            "Commands: /status · /pairs · /scan"
+        ),
+        parse_mode=ParseMode.MARKDOWN
+    )
+
     log.info("Bot starting...")
-    application.run_polling()
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
