@@ -23,6 +23,7 @@ PAIRS = {
 }
 
 price_history = {pair: [] for pair in PAIRS}
+last_signals = {}
 
 def get_price(from_cur, to_cur):
     try:
@@ -59,52 +60,39 @@ def rsi(prices, period=14):
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
-last_signals = {}
-
 def analyse(pair_name, from_cur, to_cur):
     price = get_price(from_cur, to_cur)
     if not price:
         return None
-    
     history = price_history[pair_name]
     history.append(price)
     if len(history) > 50:
         history.pop(0)
-    
     if len(history) < 25:
         return None
-    
     e9 = ema(history, 9)
     e21 = ema(history, 21)
     r = rsi(history)
-    
     if not e9 or not e21:
         return None
-    
-    prev_history = history[:-1]
-    pe9 = ema(prev_history, 9)
-    pe21 = ema(prev_history, 21)
-    
+    prev = history[:-1]
+    pe9 = ema(prev, 9)
+    pe21 = ema(prev, 21)
     if not pe9 or not pe21:
         return None
-    
     cross_up = pe9 <= pe21 and e9 > e21
     cross_down = pe9 >= pe21 and e9 < e21
-    
     if cross_up and r < 70:
         direction = "BUY"
     elif cross_down and r > 30:
         direction = "SELL"
     else:
         return None
-    
     if last_signals.get(pair_name) == direction:
         return None
     last_signals[pair_name] = direction
-    
     sl_pips = price * 0.002
     tp_pips = price * 0.003
-    
     if direction == "BUY":
         sl = round(price - sl_pips, 5)
         tp1 = round(price + tp_pips, 5)
@@ -113,13 +101,11 @@ def analyse(pair_name, from_cur, to_cur):
         sl = round(price + sl_pips, 5)
         tp1 = round(price - tp_pips, 5)
         tp2 = round(price - tp_pips * 2, 5)
-    
     score = sum([
         True,
         (direction == "BUY" and r < 55) or (direction == "SELL" and r > 45),
     ])
     strength = ["💪 Moderate", "🔥 Strong", "🚀 Very Strong"][min(score, 2)]
-    
     return {
         "pair": pair_name,
         "direction": direction,
@@ -201,24 +187,29 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_pairs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pairs_list = "\n".join(f"• {p}" for p in PAIRS.keys())
-    await update.message.reply_text(f"📊 *Active Pairs:*\n{pairs_list}", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(
+        f"📊 *Active Pairs:*\n{pairs_list}",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 async def cmd_scan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Scanning now...")
     await scan_and_alert(ctx.bot)
     await update.message.reply_text("✅ Scan complete!")
 
+async def post_init(application):
+    asyncio.ensure_future(run_scanner(application))
+
 def main():
     if not TOKEN or not CHAT_ID:
         raise ValueError("Set TELEGRAM_TOKEN and CHAT_ID!")
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("pairs", cmd_pairs))
-    app.add_handler(CommandHandler("scan", cmd_scan))
-    app.post_init = lambda a: asyncio.ensure_future(run_scanner(a))
+    application = Application.builder().token(TOKEN).post_init(post_init).build()
+    application.add_handler(CommandHandler("start", cmd_start))
+    application.add_handler(CommandHandler("status", cmd_status))
+    application.add_handler(CommandHandler("pairs", cmd_pairs))
+    application.add_handler(CommandHandler("scan", cmd_scan))
     log.info("Bot starting...")
-    app.run_polling(drop_pending_updates=True)
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
